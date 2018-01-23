@@ -3,8 +3,9 @@ package predicate
 import (
 	"strings"
 
-	. "./types"
 	. "./errors"
+	. "./types"
+	"reflect"
 )
 
 // Basic functions
@@ -14,19 +15,46 @@ func Exists() Predicate {
 	return exists
 }
 
-// String functions
-func Equals(str string) Predicate {
-	return MakeStringPredicate(
-		EQUALS,
-		func(obj Object) (bool, error) {
-			if v, ok := obj.(string); ok {
-				return v == str, nil
-			} else {
-				return false, TypeError
-			}
-		},
-		str)
+func Equals(value interface{}) Predicate {
+	switch val := value.(type) {
+	case string:
+		return MakeStringPredicate(
+			EQUALS,
+			func(obj Object) (bool, error) {
+				if v, ok := obj.(string); ok {
+					return v == val, nil
+				} else {
+					return false, TypeError
+				}
+			},
+			val)
+	case float64:
+		return MakeNumericPredicate(
+			EQUALS,
+			func(obj Object) (bool, error) {
+				if v, ok := obj.(float64); ok {
+					return v == val, nil
+				} else {
+					return false, TypeError
+				}
+			},
+			val)
+	default:
+		typ := reflect.TypeOf(val)
+		return MakeBasePredicate(
+			EQUALS,
+			func(obj Object) (bool, error) {
+				if reflect.TypeOf(obj) == typ {
+					return value == obj, nil
+				} else {
+					return false, TypeError
+				}
+			},
+		)
+	}
 }
+
+// String functions
 
 func BeginsWith(prefix string) Predicate {
 	return MakeStringPredicate(
@@ -67,11 +95,34 @@ func Contains(substring string) Predicate {
 		substring)
 }
 
+// Numeric
+
+func LessThan(value float64) Predicate {
+	return MakeNumericPredicate(
+		LESS_THAN,
+		func(obj Object) (bool, error) {
+			if v, ok := obj.(float64); ok {
+				return v < value, nil
+			} else {
+				return false, TypeError
+			}
+		},
+		value)
+}
+
+func GreaterThan(value float64) Predicate {
+	return Not(Or(LessThan(value), Equals(value)))
+}
+
+func NearEqual(value, epsilon float64) Predicate {
+	return Not(Or(GreaterThan(value+epsilon), LessThan(value-epsilon)))
+}
+
 // Predicate Composition
 
 func Not(p Predicate) Predicate {
 	if p.Type() == NOT {
-		np := p.(*CompositePredicate)
+		np := p.(CompositePredicate)
 		return np.Values()[0] // :)
 	}
 
@@ -88,49 +139,47 @@ func Not(p Predicate) Predicate {
 }
 
 func And(p1 Predicate, p2 Predicate, ps ...Predicate) Predicate {
-	ps = append([]Predicate{p1, p2}, ps...) // forces minimum size of 2
+	allp := make([]Predicate, len(ps)+2)
+	copy(allp, append([]Predicate{p1, p2}, ps...))
+	ps = allp
 
 	return MakeCompositePredicate(
 		AND,
 		func(obj Object) (bool, error) {
-			var errs *CompositeError
+			errs := CompositeError{}
 			for _, r := range ps {
 				b, err := r.Match(obj)
 				if err != nil {
-					if errs == nil {
-						errs = &CompositeError{}
-					}
 					errs.Append(err)
 				}
 				if !b {
-					return false, errs
+					return false, errs.NilZero()
 				}
 			}
-			return true, errs
+			return true, errs.NilZero()
 		},
 		ps)
 }
 
 func Or(p1 Predicate, p2 Predicate, ps ...Predicate) Predicate {
-	ps = append([]Predicate{p1, p2}, ps...)
+	allp := make([]Predicate, len(ps)+2)
+	copy(allp, append([]Predicate{p1, p2}, ps...))
+	ps = allp
 
 	return MakeCompositePredicate(
 		OR,
 		func(obj Object) (bool, error) {
-			var errs *CompositeError
+			errs := CompositeError{}
 			for _, r := range ps {
 				b, err := r.Match(obj)
 				if err != nil {
-					if errs == nil {
-						errs = &CompositeError{}
-					}
 					errs.Append(err)
 				}
 				if b {
-					return true, errs
+					return true, errs.NilZero()
 				}
 			}
-			return false, errs
+			return false, errs.NilZero()
 		},
 		ps)
 }
